@@ -433,7 +433,12 @@ const DASHBOARD_SHEETS = {
   itkp: {
     title: 'FIX ITKP OPD',
     spreadsheetId: '1OCmZUvwa48ieHrswASks4J1v9JY8ikIZ4hKwiIXSWyU',
-    gid: '0'
+    sheetName: 'FIX ITKP OPD',
+    gid: '211847775',
+    requiredHeaders: [
+      'Satuan Kerja',
+      'Nilai ITKP Indikator Pemanfaatan Sistem - skor maksimal 30 (point)'
+    ]
   },
   perencanaan: {
     title: 'D_PERENCANAAN',
@@ -718,7 +723,10 @@ function parseCsv(text) {
 }
 
 async function fetchSheetRows(config) {
-  const url = `https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/gviz/tq?tqx=out:csv&gid=${config.gid}&v=${Date.now()}`;
+  const sourceParam = config.sheetName
+    ? `sheet=${encodeURIComponent(config.sheetName)}`
+    : `gid=${encodeURIComponent(config.gid || '')}`;
+  const url = `https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/gviz/tq?tqx=out:csv&${sourceParam}&v=${Date.now()}`;
   const response = await fetch(url, { cache: 'no-store' });
 
   if (!response.ok) {
@@ -733,6 +741,14 @@ async function fetchSheetRows(config) {
 
   const matrix = parseCsv(text);
   const headers = matrix.shift() || [];
+
+  if (Array.isArray(config.requiredHeaders) && config.requiredHeaders.length) {
+    const normalizedHeaders = headers.map((header) => normalizeHeader(header));
+    const missingHeaders = config.requiredHeaders.filter((header) => !normalizedHeaders.includes(normalizeHeader(header)));
+    if (missingHeaders.length) {
+      throw new Error(`${config.title} terbaca dari tab yang tidak sesuai. Header tidak ditemukan: ${missingHeaders.join(', ')}`);
+    }
+  }
 
   return matrix.map((cells) => {
     const row = {};
@@ -1650,7 +1666,7 @@ function renderDashboardError(error) {
         </div>
         <div class="insight-item">
           <b>2. GID sheet</b>
-          <span>FIX ITKP OPD (TRAX ITKP KEPKA 74 2026): gid 0, D_PERENCANAAN: 1819757327, D_REALISASI: 325886021.</span>
+          <span>FIX ITKP OPD (TRAX ITKP KEPKA 74 2026): dibaca berdasarkan nama sheet, D_PERENCANAAN: 1819757327, D_REALISASI: 325886021.</span>
         </div>
         <div class="insight-item">
           <b>3. Header</b>
