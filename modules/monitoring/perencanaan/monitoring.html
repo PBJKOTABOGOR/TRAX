@@ -102,7 +102,7 @@
         </div>
         <div>
           <label>Sub Kegiatan</label>
-          <select id="filter_sub_kegiatan"><option value="">Semua</option></select>
+          <select id="filter_sub_kegiatan" disabled><option value="">Pilih Satuan Kerja</option></select>
         </div>
         <div>
           <label>Filter Warning</label>
@@ -115,7 +115,7 @@
       </div>
 
       <div class="inline-actions">
-        <button onclick="runMonitoring()">Tampilkan</button>
+        <button onclick="runMonitoringFast(false)">Tampilkan</button>
         <button class="secondary" onclick="toggleSortWaktu()">Urut Waktu: <span id="sortWaktuLabel">Terlama → Terbaru</span></button>
         <button class="secondary" onclick="resetMonitoring()">Reset</button>
         <button class="secondary" onclick="exportMonitoringExcel()">Export Excel</button>
@@ -144,7 +144,8 @@
                 </button>
               </th>
               <th>Pagu RUP</th>
-              <th>Total Realisasi</th>
+              <th>Nilai Kontrak</th>
+              <th>Realisasi Keuangan</th>
               <th>% Realisasi</th>
               <th>Status</th>
               <th>Progres</th>
@@ -154,7 +155,7 @@
             </tr>
           </thead>
           <tbody id="monitoringBody">
-            <tr><td colspan="14">Belum ada data.</td></tr>
+            <tr><td colspan="15">Belum ada data.</td></tr>
           </tbody>
         </table>
       </div>
@@ -234,7 +235,7 @@
           </div>
 
           <div class="meta-box">
-            <div class="meta-label">Pagu / Realisasi</div>
+            <div class="meta-label">Pagu / Nilai Kontrak / Realisasi Keuangan</div>
             <div class="meta-value compact" id="detailPaguVsRealisasi">-</div>
           </div>
           <div class="meta-box">
@@ -260,6 +261,21 @@
           <div id="detailTindakLanjut" style="font-size:14px; font-weight:700; line-height:1.7; color:#334155;">-</div>
         </div>
 
+        <div class="card payment-detail-card" style="box-shadow:none; border:1px solid #e2e8f0; padding:14px; margin-bottom:16px;">
+          <div class="payment-detail-head">
+            <div>
+              <div class="meta-label" style="margin-bottom:6px;">Realisasi Keuangan</div>
+              <div class="payment-summary" id="detailPaymentSummary">-</div>
+            </div>
+          </div>
+          <div class="table-wrap payment-table-wrap">
+            <table class="payment-table">
+              <thead><tr><th>No.</th><th>Kode Paket</th><th>No. BAST</th><th>Cara Pembayaran</th><th>Besar Pembayaran</th></tr></thead>
+              <tbody id="detailPaymentBody"><tr><td colspan="5">Belum ada data pembayaran.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
@@ -272,7 +288,7 @@
                 <th>Status Paket</th>
                 <th>Sumber Transaksi</th>
                 <th>BAST</th>
-                <th>Nilai Realisasi</th>
+                <th>Nilai Kontrak</th>
               </tr>
             </thead>
             <tbody id="detailBody">
@@ -294,7 +310,8 @@
       SHEETS: {
         perencanaan: 'D_PERENCANAAN',
         realisasi: 'D_REALISASI_MAP',
-        realisasiMap: 'D_REALISASI_MAP'
+        realisasiMap: 'D_REALISASI_MAP',
+        pembayaran: 'CMBNTNONT_BAST'
       }
     };
 
@@ -304,6 +321,10 @@
     let sortWaktuAsc = true;
     let groupedRealByKode = {};
     let semicolonHistoryLookup = {};
+    let groupedPaymentsByPackage = {};
+    let groupedPaymentsByRup = {};
+    let filterApplyToken = 0;
+    let searchDebounceTimer = null;
 
     function csvUrlBySheetName(sheetId, sheetName) {
       const cacheBust = Math.floor(Date.now() / 60000);
@@ -331,7 +352,7 @@
       const loader = qs('monitoringLoader') || document.getElementById('monitoringLoader');
       if (!loader) return;
 
-      const subtitle = loader.querySelector('.loader-subtitle');
+      const subtitle = loader.querySelector('.sirup-loader-subtitle, .loader-subtitle');
       if (subtitle && text) subtitle.innerText = text;
 
       loader.classList.add('show');
@@ -894,138 +915,183 @@
       return grouped;
     }
 
-    function buildMonitoringData(perencanaanRows, realisasiRows) {
+    function groupPembayaran(paymentRows) {
+      const byPackage = {};
+      const byRup = {};
+
+      normalizeRows(paymentRows || []).forEach(r => {
+        const kodePaket = normalizeKodeValue(r.kd_nontender || r.kode_paket || '');
+        const rupParts = splitHistoryKode(r.kd_rup || r.kode_rup || '');
+        const amount = parseMoney(r.besar_pembayaran || 0);
+        const detail = {
+          kode_paket: kodePaket,
+          kd_rup: String(r.kd_rup || r.kode_rup || '').trim(),
+          no_bast: String(r.no_bast || '').trim(),
+          nama_paket: String(r.nama_paket || '').trim(),
+          nama_satker: String(r.nama_satker || '').trim(),
+          cara_pembayaran: String(r.cara_pembayaran_kontrak || r.cara_pembayaran || '').trim() || '-',
+          besar_pembayaran: amount
+        };
+
+        if (kodePaket) {
+          if (!byPackage[kodePaket]) byPackage[kodePaket] = { total: 0, rows: [] };
+          byPackage[kodePaket].total += amount;
+          byPackage[kodePaket].rows.push(detail);
+        }
+
+        rupParts.forEach(kodeRup => {
+          if (!byRup[kodeRup]) byRup[kodeRup] = { total: 0, rows: [] };
+          byRup[kodeRup].total += amount;
+          byRup[kodeRup].rows.push(detail);
+        });
+      });
+      return { byPackage, byRup };
+    }
+
+    function getPaymentRowsForRup(kodeRup, detailRows) {
+      const packageIds = [...new Set((detailRows || [])
+        .map(item => normalizeKodeValue(item.kode_paket))
+        .filter(Boolean))];
+      const rows = [];
+
+      packageIds.forEach(kodePaket => {
+        const group = groupedPaymentsByPackage[kodePaket];
+        if (group && Array.isArray(group.rows)) rows.push(...group.rows);
+      });
+
+      // Fallback berdasarkan Kode RUP hanya bila Kode Paket belum ditemukan.
+      if (!rows.length) {
+        const fallback = groupedPaymentsByRup[normalizeKodeValue(kodeRup)];
+        if (fallback && Array.isArray(fallback.rows)) rows.push(...fallback.rows);
+      }
+      return rows;
+    }
+
+    function getFinancialMode(metodeRup, detailRows) {
+      const metodeText = [metodeRup, ...(detailRows || []).map(item => item.metode)]
+        .join(' ').toLowerCase();
+      const sources = (detailRows || []).map(item => String(item.sumber_transaksi || '')
+        .toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim());
+
+      const isEPurchasing = metodeText.includes('e-purchasing') || metodeText.includes('e purchasing');
+      const isPencatatanNonTender = sources.some(src => src.includes('pencatatan non tender'));
+      const isTenderOrNonTender = sources.some(src => src === 'tender' || src === 'non tender');
+
+      if (isEPurchasing || isPencatatanNonTender) return 'kontrak';
+      if (isTenderOrNonTender) return 'pembayaran';
+      return 'kontrak';
+    }
+
+    function buildMonitoringData(perencanaanRows, realisasiRows, pembayaranRows) {
       const planRows = normalizeRows(perencanaanRows);
       const realRows = normalizeRows(realisasiRows);
 
       semicolonHistoryLookup = buildSemicolonHistoryLookup(realRows);
       groupedRealByKode = groupRealisasi(realRows);
+      const paymentGroups = groupPembayaran(pembayaranRows || []);
+      groupedPaymentsByPackage = paymentGroups.byPackage;
+      groupedPaymentsByRup = paymentGroups.byRup;
 
       const currentOrder = getCurrentMonthOrder();
 
-      return planRows
-        .filter(r => String(r.kode_rup || '').trim())
-        .map(r => {
-          const kodeRup = String(r.kode_rup || '').trim();
-          const pagu = parseMoney(r.nilai_pagu || 0);
+      return planRows.filter(r => String(r.kode_rup || '').trim()).map(r => {
+        const kodeRup = String(r.kode_rup || '').trim();
+        const pagu = parseMoney(r.nilai_pagu || r.pagu || r.total_pagu || r.nilai || r.pagu_rup || r['nilai_pagu_(rp)'] || 0);
+        const real = groupedRealByKode[kodeRup] || { recall_paket: 0, total_realisasi: 0, rows: [], first_order: null };
+        const recallPaket = Number(real.recall_paket || 0);
+        const totalRealisasiFull = Number(real.total_realisasi_full || real.total_realisasi || 0);
 
-          const real = groupedRealByKode[kodeRup] || {
-            recall_paket: 0,
-            total_realisasi: 0,
-            rows: [],
-            first_order: null
-          };
+        // Nilai lama tetap dipakai sebagai Nilai Kontrak.
+        let nilaiKontrak = Number(real.total_realisasi || 0);
+        if (Number(real.gabungan_count || 0) > 0 && pagu > 0) nilaiKontrak = Math.min(nilaiKontrak, pagu);
 
-          const recallPaket = Number(real.recall_paket || 0);
-          const totalRealisasiFull = Number(real.total_realisasi_full || real.total_realisasi || 0);
+        const detailRows = real.rows || [];
+        const financialMode = getFinancialMode(r.metode_pengadaan || '', detailRows);
+        const paymentRows = getPaymentRowsForRup(kodeRup, detailRows);
+        let realisasiKeuangan = nilaiKontrak;
 
-          /*
-            Jika realisasi berasal dari gabungan beberapa Kode RUP Pengadaan Langsung,
-            jangan tampilkan nilai paket gabungan penuh pada setiap RUP.
-            Untuk monitoring per kode RUP, cukup dianggap terealisasi sebesar pagu RUP tersebut.
-            Nilai paket gabungan penuh tetap tampil di Detail.
-          */
-          let totalRealisasi = Number(real.total_realisasi || 0);
-          if (Number(real.gabungan_count || 0) > 0 && pagu > 0) {
-            totalRealisasi = Math.min(totalRealisasi, pagu);
-          }
+        if (financialMode === 'pembayaran') {
+          realisasiKeuangan = paymentRows.reduce((sum, item) => sum + Number(item.besar_pembayaran || 0), 0);
+          if (Number(real.gabungan_count || 0) > 0 && pagu > 0) realisasiKeuangan = Math.min(realisasiKeuangan, pagu);
+        }
 
-          const persentase = pagu > 0 ? (totalRealisasi / pagu) * 100 : 0;
-          const sisaPagu = pagu - totalRealisasi;
+        const persentase = pagu > 0 ? (realisasiKeuangan / pagu) * 100 : 0;
+        const sisaPagu = pagu - nilaiKontrak;
+        const waktuPemilihanLabel = monthYearLabel(r.waktu_pemilihan || '-');
+        const waktuPemilihanOrder = getWaktuOrder(waktuPemilihanLabel);
+        const detailSummary = analyzePackageStatuses(detailRows, r.metode_pengadaan || '');
+        const historyDisplay = getSemicolonHistoryForKode(kodeRup, detailRows, semicolonHistoryLookup);
 
-          const waktuPemilihanLabel = monthYearLabel(r.waktu_pemilihan || '-');
-          const waktuPemilihanOrder = getWaktuOrder(waktuPemilihanLabel);
+        let status = 'Belum Berjalan';
+        if (recallPaket > 0) {
+          if (detailSummary.berjalan > 0) status = 'Berjalan';
+          else if (detailSummary.selesaiPemilihan > 0) status = 'Selesai Proses Pemilihan';
+          else if (detailSummary.selesai > 0) status = 'Selesai';
+        }
 
-          const detailSummary = analyzePackageStatuses(real.rows || [], r.metode_pengadaan || '');
-          const historyDisplay = getSemicolonHistoryForKode(kodeRup, real.rows || [], semicolonHistoryLookup);
+        // Progres tetap mengikuti Nilai Kontrak agar aturan lama tidak berubah.
+        let progres = '-';
+        if (recallPaket > 0) {
+          const persenKontrak = pagu > 0 ? (nilaiKontrak / pagu) * 100 : 0;
+          if (nilaiKontrak > pagu) progres = 'Melebihi Pagu';
+          else if (Math.abs(nilaiKontrak - pagu) < 1 || persenKontrak >= 99.99) progres = 'Sesuai Pagu';
+        }
 
-          let status = 'Belum Berjalan';
-          if (recallPaket > 0) {
-            if (detailSummary.berjalan > 0) {
-              status = 'Berjalan';
-            } else if (detailSummary.selesaiPemilihan > 0) {
-              status = 'Selesai Proses Pemilihan';
-            } else if (detailSummary.selesai > 0) {
-              status = 'Selesai';
-            }
-          }
+        let posisiJadwal = 'Belum';
+        if (recallPaket > 0) posisiJadwal = 'Sesuai';
+        else posisiJadwal = waktuPemilihanOrder < currentOrder ? 'Melewati' : 'Belum';
 
-          let progres = '-';
-          if (recallPaket > 0) {
-            if (totalRealisasi > pagu) {
-              progres = 'Melebihi Pagu';
-            } else if (Math.abs(totalRealisasi - pagu) < 1 || persentase >= 99.99) {
-              progres = 'Sesuai Pagu';
-            }
-          }
+        let warning = 'OK';
+        if (recallPaket === 0 && posisiJadwal === 'Melewati') warning = 'Belum ada realisasi dan sudah melewati waktu pemilihan.';
 
-          let posisiJadwal = 'Belum';
-          if (recallPaket > 0) {
-            posisiJadwal = 'Sesuai';
-          } else {
-            posisiJadwal = waktuPemilihanOrder < currentOrder ? 'Melewati' : 'Belum';
-          }
+        const isEPurchasing = String(r.metode_pengadaan || '').toLowerCase().includes('e-purchasing');
+        if (isEPurchasing && persentase >= 99.99 && detailSummary.onProcess > 0) {
+          warning = 'Realisasi sudah 100%, namun masih ada paket on process. Perlu tindak lanjut penyelesaian di sistem.';
+        }
 
-          let warning = 'OK';
-          if (recallPaket === 0 && posisiJadwal === 'Melewati') {
-            warning = 'Belum ada realisasi dan sudah melewati waktu pemilihan.';
-          }
+        let ketJadwal = '-';
+        if (recallPaket > 0 && real.first_order && waktuPemilihanOrder > 0) {
+          if (real.first_order > waktuPemilihanOrder) ketJadwal = 'Proses pemilihan tidak sesuai jadwal';
+          else if (real.first_order < waktuPemilihanOrder) ketJadwal = 'Proses pemilihan lebih cepat dari jadwal';
+          else ketJadwal = 'Proses pemilihan sesuai jadwal';
+        }
 
-          if (recallPaket > 0 && Number(real.history_count || 0) > 0 && warning === 'OK') {
-            warning = 'Kode RUP realisasi memiliki riwayat perubahan kode.';
-          }
-          if (recallPaket > 0 && Number(real.gabungan_count || 0) > 0 && warning === 'OK') {
-            warning = 'Realisasi berasal dari penggabungan beberapa Kode RUP.';
-          }
+        let tindakLanjut = detailSummary.tindakLanjut || 'Tidak ada catatan tambahan.';
+        if (ketJadwal !== '-') tindakLanjut = ketJadwal + '. ' + tindakLanjut;
 
-          const isEPurchasing = String(r.metode_pengadaan || '').toLowerCase().includes('e-purchasing');
-          if (isEPurchasing && persentase >= 99.99 && detailSummary.onProcess > 0) {
-            warning = 'Realisasi sudah 100%, namun masih ada paket on process. Perlu tindak lanjut penyelesaian di sistem.';
-          }
-
-          let ketJadwal = '-';
-          if (recallPaket > 0 && real.first_order && waktuPemilihanOrder > 0) {
-            if (real.first_order > waktuPemilihanOrder) {
-              ketJadwal = 'Proses pemilihan tidak sesuai jadwal';
-            } else if (real.first_order < waktuPemilihanOrder) {
-              ketJadwal = 'Proses pemilihan lebih cepat dari jadwal';
-            } else {
-              ketJadwal = 'Proses pemilihan sesuai jadwal';
-            }
-          }
-
-          let tindakLanjut = detailSummary.tindakLanjut || 'Tidak ada catatan tambahan.';
-          if (ketJadwal !== '-') {
-            tindakLanjut = ketJadwal + '. ' + tindakLanjut;
-          }
-
-          return {
-            kode_rup: kodeRup,
-            nama_paket: String(r.nama_paket || '').trim(),
-            satuan_kerja: String(r.nama_satuan_kerja || '').trim(),
-            program: String(r.program || '').trim() || '-',
-            kegiatan: String(r.kegiatan || '').trim() || '-',
-            sub_kegiatan: String(r.sub_kegiatan || r.subkegiatan || '').trim() || '-',
-            pengadaan: String(r.cara_pengadaan || '').trim() || '-',
-            jenis: String(r.jenis_pengadaan || '').trim() || '-',
-            metode: String(r.metode_pengadaan || '').trim() || '-',
-            waktu_pemilihan_label: waktuPemilihanLabel,
-            waktu_pemilihan_order: waktuPemilihanOrder,
-            pagu: pagu,
-            total_realisasi: totalRealisasi,
-            persentase: persentase,
-            recall_paket: recallPaket,
-            sisa_pagu: sisaPagu,
-            status: status,
-            progres: progres,
-            posisi_jadwal: posisiJadwal,
-            warning: warning,
-            ket_jadwal: ketJadwal,
-            tindak_lanjut: tindakLanjut,
-            history_display: historyDisplay,
-            detail_summary: detailSummary
-          };
-        });
+        return {
+          kode_rup: kodeRup,
+          nama_paket: String(r.nama_paket || '').trim(),
+          satuan_kerja: String(r.nama_satuan_kerja || '').trim(),
+          program: String(r.program || '').trim() || '-',
+          kegiatan: String(r.kegiatan || '').trim() || '-',
+          sub_kegiatan: String(r.sub_kegiatan || r.subkegiatan || '').trim() || '-',
+          pengadaan: String(r.cara_pengadaan || '').trim() || '-',
+          jenis: String(r.jenis_pengadaan || '').trim() || '-',
+          metode: String(r.metode_pengadaan || '').trim() || '-',
+          waktu_pemilihan_label: waktuPemilihanLabel,
+          waktu_pemilihan_order: waktuPemilihanOrder,
+          pagu,
+          nilai_kontrak: nilaiKontrak,
+          total_realisasi: nilaiKontrak,
+          total_realisasi_full: totalRealisasiFull,
+          realisasi_keuangan: realisasiKeuangan,
+          persentase,
+          financial_mode: financialMode,
+          payment_rows: paymentRows,
+          payment_count: financialMode === 'pembayaran' ? paymentRows.length : 0,
+          recall_paket: recallPaket,
+          sisa_pagu: sisaPagu,
+          status,
+          progres,
+          posisi_jadwal: posisiJadwal,
+          warning,
+          ket_jadwal: ketJadwal,
+          tindak_lanjut: tindakLanjut,
+          history_display: historyDisplay,
+          detail_summary: detailSummary
+        };
+      });
     }
 
     function fillSelect(id, items) {
@@ -1047,13 +1113,54 @@
       if (oldExists) el.value = oldVal;
     }
 
+    function updateSubKegiatanOptions(preserveValue = true) {
+      const satkerEl = document.getElementById('filter_satker');
+      const subEl = document.getElementById('filter_sub_kegiatan');
+      if (!subEl) return;
+
+      const satker = satkerEl?.value || '';
+      const oldVal = preserveValue ? (subEl.value || '') : '';
+
+      subEl.innerHTML = '';
+
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = satker ? 'Semua' : 'Pilih Satuan Kerja';
+      subEl.appendChild(first);
+
+      if (!satker) {
+        subEl.value = '';
+        subEl.disabled = true;
+        return;
+      }
+
+      subEl.disabled = false;
+
+      const items = [...new Set(
+        allRows
+          .filter(r => r.satuan_kerja === satker)
+          .map(r => r.sub_kegiatan)
+          .filter(v => v && v !== '-')
+      )].sort((a, b) => a.localeCompare(b, 'id'));
+
+      items.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        subEl.appendChild(opt);
+      });
+
+      if (oldVal && items.includes(oldVal)) subEl.value = oldVal;
+      else subEl.value = '';
+    }
+
     function buildFilterOptions(rows) {
       fillSelect('filter_satker', [...new Set(rows.map(r => r.satuan_kerja).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_pengadaan', [...new Set(rows.map(r => r.pengadaan).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_metode', [...new Set(rows.map(r => r.metode).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_jenis', [...new Set(rows.map(r => r.jenis).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
-      fillSelect('filter_sub_kegiatan', [...new Set(rows.map(r => r.sub_kegiatan).filter(v => v && v !== '-'))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_waktu_pemilihan', [...new Set(rows.map(r => r.waktu_pemilihan_label).filter(Boolean))].sort((a, b) => getWaktuOrder(a) - getWaktuOrder(b)));
+      updateSubKegiatanOptions(false);
     }
 
     function renderSummary(rows) {
@@ -1083,16 +1190,13 @@
     }
 
     function renderRows(rows) {
-      const tbody = document.getElementById('monitoringBody');
+      const tbody = qs('monitoringBody');
       if (!tbody) return;
-
       tbody.innerHTML = '';
-
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="14">Data tidak ditemukan.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="15">Data tidak ditemukan.</td></tr>';
         return;
       }
-
       rows.forEach(row => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -1103,14 +1207,14 @@
           <td>${escapeHtml(row.metode)}</td>
           <td>${escapeHtml(row.waktu_pemilihan_label)}</td>
           <td class="right">${formatMoney(row.pagu)}</td>
-          <td class="right">${formatMoney(row.total_realisasi)}</td>
+          <td class="right">${formatMoney(row.nilai_kontrak)}</td>
+          <td class="right">${formatMoney(row.realisasi_keuangan)}</td>
           <td class="right">${formatPercent(row.persentase)}</td>
           <td>${buildStatusBadge(row.status)}</td>
           <td>${buildProgresBadge(row.progres)}</td>
           <td>${buildJadwalBadge(row.posisi_jadwal)}</td>
           <td>${warningCell(row.warning)}</td>
-          <td><button class="detail-btn" onclick="openDetailModal('${escapeHtml(row.kode_rup)}')">Detail</button></td>
-        `;
+          <td><button class="detail-btn" onclick="openDetailModal('${escapeHtml(row.kode_rup)}')">Detail</button></td>`;
         tbody.appendChild(tr);
       });
     }
@@ -1197,11 +1301,27 @@
       setText('monitoringStatus', `${rowsToRender.length} data tampil.`);
     }
 
+    function runMonitoringFast(syncSubKegiatan = false) {
+      if (syncSubKegiatan) updateSubKegiatanOptions(false);
+
+      const token = ++filterApplyToken;
+      showMonitoringLoader('Menerapkan filter...');
+      setText('monitoringStatus', 'Menerapkan filter...');
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (token !== filterApplyToken) return;
+          runMonitoring();
+          hideMonitoringLoader();
+        });
+      });
+    }
+
     function toggleSortWaktu() {
       sortWaktuAsc = !sortWaktuAsc;
       setText('sortWaktuLabel', sortWaktuAsc ? 'Terlama → Terbaru' : 'Terbaru → Terlama');
       setText('sortWaktuArrow', sortWaktuAsc ? '↑' : '↓');
-      runMonitoring();
+      runMonitoringFast(false);
     }
 
     function runMonitoring() {
@@ -1275,7 +1395,8 @@
         if (el) el.value = '';
       });
 
-      runMonitoring();
+      updateSubKegiatanOptions(false);
+      runMonitoringFast(false);
     }
 
 
@@ -1334,11 +1455,8 @@
     function openDetailModal(kodeRup) {
       const row = allRows.find(r => String(r.kode_rup) === String(kodeRup));
       if (!row) return;
-
       const detailRows = (groupedRealByKode[kodeRup] && groupedRealByKode[kodeRup].rows) ? groupedRealByKode[kodeRup].rows : [];
       const ds = row.detail_summary || {};
-      const historyVisible = getReadableHistoryKodeRup(detailRows, row.kode_rup);
-      const historyText = getDetailHistoryText(detailRows);
 
       setText('detailTitle', 'Detail Kode RUP ' + row.kode_rup);
       setText('detailKodeRup', row.kode_rup);
@@ -1355,23 +1473,39 @@
       setText('detailStatus', row.status);
       setText('detailProgres', row.progres);
       setText('detailPosisiJadwal', row.posisi_jadwal);
-      setText('detailPaguVsRealisasi', `${formatMoney(row.pagu)} / ${formatMoney(row.total_realisasi)} (${formatPercent(row.persentase)})`);
+      setText('detailPaguVsRealisasi', `${formatMoney(row.pagu)} / ${formatMoney(row.nilai_kontrak)} / ${formatMoney(row.realisasi_keuangan)} (${formatPercent(row.persentase)})`);
       setText('detailRecall', String(row.recall_paket));
       setText('detailSisaPagu', formatMoney(row.sisa_pagu));
       setText('detailRingkasanPaket', ds.ringkasanPaket || 'Belum ada paket realisasi');
       setText('detailWarning', row.warning || 'OK');
-      setText(
-        'detailTindakLanjut',
-        (row.history_display && row.history_display !== '-' ? 'Gabungan / History Kode RUP: ' + row.history_display + '\n' : '') +
-        (row.tindak_lanjut || 'Tidak ada catatan tambahan.')
-      );
+      setText('detailTindakLanjut', (row.history_display && row.history_display !== '-' ? 'Gabungan / History Kode RUP: ' + row.history_display + '\n' : '') + (row.tindak_lanjut || 'Tidak ada catatan tambahan.'));
 
-      const tbody = document.getElementById('detailBody');
-      const empty = document.getElementById('detailEmpty');
+      const paymentSummary = qs('detailPaymentSummary');
+      const paymentBody = qs('detailPaymentBody');
+      if (paymentSummary && paymentBody) {
+        paymentBody.innerHTML = '';
+        if (row.financial_mode === 'pembayaran') {
+          const paymentRows = Array.isArray(row.payment_rows) ? row.payment_rows : [];
+          paymentSummary.innerText = `${paymentRows.length} kali pembayaran • Total ${formatMoney(row.realisasi_keuangan)}`;
+          if (!paymentRows.length) {
+            paymentBody.innerHTML = '<tr><td colspan="5">Belum ada realisasi keuangan pada CMBNTNONT_BAST.</td></tr>';
+          } else {
+            paymentRows.forEach((item, index) => {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `<td class="center">${index + 1}</td><td>${escapeHtml(item.kode_paket || '-')}</td><td>${escapeHtml(item.no_bast || '-')}</td><td>${escapeHtml(item.cara_pembayaran || '-')}</td><td class="right bold">${formatMoney(item.besar_pembayaran)}</td>`;
+              paymentBody.appendChild(tr);
+            });
+          }
+        } else {
+          paymentSummary.innerText = `Mengikuti Nilai Kontrak • ${formatMoney(row.realisasi_keuangan)}`;
+          paymentBody.innerHTML = '<tr><td colspan="5">Realisasi Keuangan mengikuti Nilai Kontrak untuk E-Purchasing/Pencatatan Non Tender.</td></tr>';
+        }
+      }
+
+      const tbody = qs('detailBody');
+      const empty = qs('detailEmpty');
       if (!tbody || !empty) return;
-
       tbody.innerHTML = '';
-
       if (!detailRows.length) {
         empty.style.display = 'block';
         tbody.innerHTML = '<tr><td colspan="9">Belum ada data realisasi.</td></tr>';
@@ -1380,28 +1514,13 @@
         detailRows.forEach(item => {
           const tr = document.createElement('tr');
           tr.innerHTML = `
-            <td>
-              ${escapeHtml(item.kode_paket)}
-              ${item.history_label ? `<div style="font-size:12px;font-weight:800;color:#1d4ed8;margin-top:4px;">${item.is_gabungan_rup ? 'Gabungan RUP' : 'History RUP'}: ${escapeHtml(item.history_label)}</div>` : ''}
-              ${(!item.history_label && item.history_kode_rup && String(item.history_kode_rup).includes(';')) ? `<div style="font-size:12px;font-weight:800;color:#1d4ed8;margin-top:4px;">History RUP: ${escapeHtml(String(item.history_kode_rup).replace(/;/g, ' → '))}</div>` : ''}
-            </td>
-            <td>${escapeHtml(item.nama_paket)}</td>
-            <td>${escapeHtml(item.nama_penyedia)}</td>
-            <td>${escapeHtml(item.satuan_kerja)}</td>
-            <td>${escapeHtml(item.metode)}</td>
-            <td>${escapeHtml(item.status_paket)}</td>
-            <td>${escapeHtml(item.sumber_transaksi)}</td>
-            <td>${escapeHtml(item.bast || '-')}</td>
-            <td class="right">
-              ${formatMoney(item.nilai)}
-              ${item.is_gabungan_rup ? `<div class="history-rup-line">Nilai paket gabungan</div>` : ''}
-            </td>
-          `;
+            <td>${escapeHtml(item.kode_paket)}${item.history_label ? `<div class="history-rup-line">${item.is_gabungan_rup ? 'Gabungan RUP' : 'History RUP'}: ${escapeHtml(item.history_label)}</div>` : ''}${(!item.history_label && item.history_kode_rup && String(item.history_kode_rup).includes(';')) ? `<div class="history-rup-line">History RUP: ${escapeHtml(String(item.history_kode_rup).replace(/;/g, ' → '))}</div>` : ''}</td>
+            <td>${escapeHtml(item.nama_paket)}</td><td>${escapeHtml(item.nama_penyedia)}</td><td>${escapeHtml(item.satuan_kerja)}</td><td>${escapeHtml(item.metode)}</td><td>${escapeHtml(item.status_paket)}</td><td>${escapeHtml(item.sumber_transaksi)}</td><td>${escapeHtml(item.bast || '-')}</td>
+            <td class="right">${formatMoney(item.nilai)}${item.is_gabungan_rup ? `<div class="history-rup-line">Nilai paket gabungan</div>` : ''}</td>`;
           tbody.appendChild(tr);
         });
       }
-
-      const modal = document.getElementById('detailModal');
+      const modal = qs('detailModal');
       if (modal) modal.classList.add('show');
     }
 
@@ -1442,19 +1561,24 @@
 
     function buildExportRows() {
       const sourceRows = filteredRows && filteredRows.length ? filteredRows : allRows;
-
       return sourceRows.map((row, index) => ({
         No: index + 1,
         'Kode RUP': row.kode_rup,
         'Nama Paket': row.nama_paket,
         'Satuan Kerja': row.satuan_kerja,
+        'Program': row.program,
+        'Kegiatan': row.kegiatan,
+        'Sub Kegiatan': row.sub_kegiatan,
         'Pengadaan': row.pengadaan,
         'Jenis Pengadaan': row.jenis,
         'Metode': row.metode,
         'Waktu Pemilihan': row.waktu_pemilihan_label,
         'Pagu RUP': Number(row.pagu || 0),
-        'Total Realisasi': Number(row.total_realisasi || 0),
+        'Nilai Kontrak': Number(row.nilai_kontrak || 0),
+        'Realisasi Keuangan': Number(row.realisasi_keuangan || 0),
         'Persentase Realisasi': Number(row.persentase || 0),
+        'Jumlah Pembayaran': Number(row.payment_count || 0),
+        'Rincian Pembayaran': row.financial_mode === 'pembayaran' ? (row.payment_rows || []).map((item, i) => `${i + 1}. ${item.cara_pembayaran || '-'}: ${formatMoney(item.besar_pembayaran)}`).join(' | ') : 'Mengikuti Nilai Kontrak',
         'Recall Paket': Number(row.recall_paket || 0),
         'Sisa Pagu': Number(row.sisa_pagu || 0),
         'Status': row.status,
@@ -1523,13 +1647,12 @@
       try {
         showMonitoringLoader('Mengambil data dari Google Sheet...');
         setText('monitoringStatus', 'Memuat data dari Google Sheet...');
-
-        const [perencanaanRows, realisasiRows] = await Promise.all([
+        const [perencanaanRows, realisasiRows, pembayaranRows] = await Promise.all([
           fetchSheet(CONFIG.SHEETS.perencanaan),
-          fetchRealisasiSheet()
+          fetchRealisasiSheet(),
+          fetchSheet(CONFIG.SHEETS.pembayaran)
         ]);
-
-        allRows = buildMonitoringData(perencanaanRows, realisasiRows);
+        allRows = buildMonitoringData(perencanaanRows, realisasiRows, pembayaranRows);
         buildFilterOptions(allRows);
         setText('sortWaktuLabel', sortWaktuAsc ? 'Terlama → Terbaru' : 'Terbaru → Terlama');
         setText('sortWaktuArrow', sortWaktuAsc ? '↑' : '↓');
@@ -1542,6 +1665,35 @@
       }
     }
 
+    function bindAutoFilterEvents() {
+      const satkerEl = document.getElementById('filter_satker');
+      if (satkerEl) satkerEl.addEventListener('change', () => runMonitoringFast(true));
+
+      [
+        'filter_pengadaan',
+        'filter_metode',
+        'filter_status',
+        'filter_progres',
+        'filter_posisi_jadwal',
+        'filter_waktu_pemilihan',
+        'filter_jenis',
+        'filter_sub_kegiatan',
+        'filter_warning'
+      ].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', () => runMonitoringFast(false));
+      });
+
+      const searchEl = document.getElementById('filter_koderup');
+      if (searchEl) {
+        searchEl.addEventListener('input', () => {
+          if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+          searchDebounceTimer = setTimeout(() => runMonitoringFast(false), 160);
+        });
+      }
+    }
+
+    bindAutoFilterEvents();
     loadMonitoringData();
 
     // Fallback agar loader tidak nyangkut kalau koneksi/CDN Google Sheet lambat.
