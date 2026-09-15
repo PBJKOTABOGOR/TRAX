@@ -20,6 +20,8 @@
     let groupedRealByKode = {};
     let semicolonHistoryLookup = {};
     let moduleDestroyed = false;
+    let filterApplyToken = 0;
+    let searchDebounceTimer = null;
 
     const cleanupListeners = [];
 
@@ -147,7 +149,7 @@
       const loader = qs('monitoringLoader') || document.getElementById('monitoringLoader');
       if (!loader) return;
 
-      const subtitle = loader.querySelector('.loader-subtitle');
+      const subtitle = loader.querySelector('.sirup-loader-subtitle, .loader-subtitle');
       if (subtitle && text) subtitle.innerText = text;
 
       loader.classList.add('show');
@@ -858,13 +860,54 @@
       if (oldExists) el.value = oldVal;
     }
 
+    function updateSubKegiatanOptions(preserveValue = true) {
+      const satkerEl = qs('filter_satker');
+      const subEl = qs('filter_sub_kegiatan');
+      if (!subEl) return;
+
+      const satker = satkerEl?.value || '';
+      const oldVal = preserveValue ? (subEl.value || '') : '';
+
+      subEl.innerHTML = '';
+
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = satker ? 'Semua' : 'Pilih Satuan Kerja';
+      subEl.appendChild(first);
+
+      if (!satker) {
+        subEl.value = '';
+        subEl.disabled = true;
+        return;
+      }
+
+      subEl.disabled = false;
+
+      const items = [...new Set(
+        allRows
+          .filter(r => r.satuan_kerja === satker)
+          .map(r => r.sub_kegiatan)
+          .filter(v => v && v !== '-')
+      )].sort((a, b) => a.localeCompare(b, 'id'));
+
+      items.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        subEl.appendChild(opt);
+      });
+
+      if (oldVal && items.includes(oldVal)) subEl.value = oldVal;
+      else subEl.value = '';
+    }
+
     function buildFilterOptions(rows) {
       fillSelect('filter_satker', [...new Set(rows.map(r => r.satuan_kerja).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_pengadaan', [...new Set(rows.map(r => r.pengadaan).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_metode', [...new Set(rows.map(r => r.metode).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_jenis', [...new Set(rows.map(r => r.jenis).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
-      fillSelect('filter_sub_kegiatan', [...new Set(rows.map(r => r.sub_kegiatan).filter(v => v && v !== '-'))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_waktu_pemilihan', [...new Set(rows.map(r => r.waktu_pemilihan_label).filter(Boolean))].sort((a, b) => getWaktuOrder(a) - getWaktuOrder(b)));
+      updateSubKegiatanOptions(false);
     }
 
     function renderSummary(rows) {
@@ -1015,11 +1058,31 @@
       setText('monitoringStatus', `${rowsToRender.length} data tampil.`);
     }
 
+    function runMonitoringFast(syncSubKegiatan = false) {
+      if (moduleDestroyed) return;
+
+      if (syncSubKegiatan) updateSubKegiatanOptions(false);
+
+      const token = ++filterApplyToken;
+      showMonitoringLoader('Menerapkan filter...');
+      setText('monitoringStatus', 'Menerapkan filter...');
+
+      // Filter berjalan dari data yang sudah ada di memori, tanpa request ulang Google Sheet.
+      // Dua frame memberi kesempatan loader tampil langsung tanpa menahan proses.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (moduleDestroyed || token !== filterApplyToken) return;
+          runMonitoring();
+          hideMonitoringLoader();
+        });
+      });
+    }
+
     function toggleSortWaktu() {
       sortWaktuAsc = !sortWaktuAsc;
       setText('sortWaktuLabel', sortWaktuAsc ? 'Terlama → Terbaru' : 'Terbaru → Terlama');
       setText('sortWaktuArrow', sortWaktuAsc ? '↑' : '↓');
-      runMonitoring();
+      runMonitoringFast(false);
     }
 
     function runMonitoring() {
@@ -1093,7 +1156,8 @@
         if (el) el.value = '';
       });
 
-      runMonitoring();
+      updateSubKegiatanOptions(false);
+      runMonitoringFast(false);
     }
 
 
@@ -1343,13 +1407,34 @@
 
     function bindMonitoringEvents() {
       on(qs('btnSortWaktu'), 'click', toggleSortWaktu);
-      on(qs('btnRunMonitoring'), 'click', runMonitoring);
+      on(qs('btnRunMonitoring'), 'click', () => runMonitoringFast(false));
       on(qs('btnResetMonitoring'), 'click', resetMonitoring);
       on(qs('btnExportMonitoring'), 'click', exportMonitoringExcel);
       on(qs('detailModal'), 'click', handleModalBackdrop);
+
+      // Semua dropdown langsung memfilter tanpa perlu menekan tombol Tampilkan.
+      on(qs('filter_satker'), 'change', () => runMonitoringFast(true));
+      [
+        'filter_pengadaan',
+        'filter_metode',
+        'filter_status',
+        'filter_progres',
+        'filter_posisi_jadwal',
+        'filter_waktu_pemilihan',
+        'filter_jenis',
+        'filter_sub_kegiatan',
+        'filter_warning'
+      ].forEach(id => on(qs(id), 'change', () => runMonitoringFast(false)));
+
+      // Pencarian teks tetap otomatis, diberi debounce pendek agar ringan saat mengetik cepat.
+      on(qs('filter_koderup'), 'input', () => {
+        if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => runMonitoringFast(false), 160);
+      });
     }
 
     window.runMonitoring = runMonitoring;
+    window.runMonitoringFast = runMonitoringFast;
     window.toggleSortWaktu = toggleSortWaktu;
     window.resetMonitoring = resetMonitoring;
     window.openDetailModal = openDetailModal;
@@ -1377,6 +1462,9 @@
 
     return function destroy() {
       moduleDestroyed = true;
+      filterApplyToken++;
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      hideMonitoringLoader();
 
       cleanupListeners.forEach(off => {
         try {
@@ -1389,6 +1477,7 @@
       cleanupListeners.length = 0;
 
       if (window.runMonitoring === runMonitoring) window.runMonitoring = undefined;
+      if (window.runMonitoringFast === runMonitoringFast) window.runMonitoringFast = undefined;
       if (window.toggleSortWaktu === toggleSortWaktu) window.toggleSortWaktu = undefined;
       if (window.resetMonitoring === resetMonitoring) window.resetMonitoring = undefined;
       if (window.openDetailModal === openDetailModal) window.openDetailModal = undefined;
