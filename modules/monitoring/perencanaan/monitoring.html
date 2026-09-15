@@ -91,7 +91,7 @@
         </div>
       </div>
 
-      <div class="grid grid-3" style="margin-top:12px;">
+      <div class="grid grid-4 monitoring-filter-secondary" style="margin-top:12px;">
         <div>
           <label>Search Kode RUP</label>
           <input type="text" id="filter_koderup" placeholder="Cari Kode RUP / Nama Paket / Satuan Kerja">
@@ -99,6 +99,10 @@
         <div>
           <label>Jenis Pengadaan</label>
           <select id="filter_jenis"><option value="">Semua</option></select>
+        </div>
+        <div>
+          <label>Sub Kegiatan</label>
+          <select id="filter_sub_kegiatan"><option value="">Semua</option></select>
         </div>
         <div>
           <label>Filter Warning</label>
@@ -186,6 +190,18 @@
           <div class="meta-box">
             <div class="meta-label">Satuan Kerja</div>
             <div class="meta-value compact" id="detailSatker">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="meta-label">Program</div>
+            <div class="meta-value compact" id="detailProgram">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="meta-label">Kegiatan</div>
+            <div class="meta-value compact" id="detailKegiatan">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="meta-label">Sub Kegiatan</div>
+            <div class="meta-value compact" id="detailSubKegiatan">-</div>
           </div>
           <div class="meta-box">
             <div class="meta-label">Pengadaan</div>
@@ -290,7 +306,7 @@
     let semicolonHistoryLookup = {};
 
     function csvUrlBySheetName(sheetId, sheetName) {
-      const cacheBust = Date.now();
+      const cacheBust = Math.floor(Date.now() / 60000);
       return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cache_bust=${cacheBust}`;
     }
 
@@ -987,6 +1003,9 @@
             kode_rup: kodeRup,
             nama_paket: String(r.nama_paket || '').trim(),
             satuan_kerja: String(r.nama_satuan_kerja || '').trim(),
+            program: String(r.program || '').trim() || '-',
+            kegiatan: String(r.kegiatan || '').trim() || '-',
+            sub_kegiatan: String(r.sub_kegiatan || r.subkegiatan || '').trim() || '-',
             pengadaan: String(r.cara_pengadaan || '').trim() || '-',
             jenis: String(r.jenis_pengadaan || '').trim() || '-',
             metode: String(r.metode_pengadaan || '').trim() || '-',
@@ -1033,6 +1052,7 @@
       fillSelect('filter_pengadaan', [...new Set(rows.map(r => r.pengadaan).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_metode', [...new Set(rows.map(r => r.metode).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_jenis', [...new Set(rows.map(r => r.jenis).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
+      fillSelect('filter_sub_kegiatan', [...new Set(rows.map(r => r.sub_kegiatan).filter(v => v && v !== '-'))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_waktu_pemilihan', [...new Set(rows.map(r => r.waktu_pemilihan_label).filter(Boolean))].sort((a, b) => getWaktuOrder(a) - getWaktuOrder(b)));
     }
 
@@ -1189,6 +1209,7 @@
       const pengadaan = document.getElementById('filter_pengadaan')?.value || '';
       const metode = document.getElementById('filter_metode')?.value || '';
       const jenis = document.getElementById('filter_jenis')?.value || '';
+      const subKegiatan = document.getElementById('filter_sub_kegiatan')?.value || '';
       const status = document.getElementById('filter_status')?.value || '';
       const progres = document.getElementById('filter_progres')?.value || '';
       const posisiJadwal = document.getElementById('filter_posisi_jadwal')?.value || '';
@@ -1203,6 +1224,7 @@
         if (pengadaan && row.pengadaan !== pengadaan) return false;
         if (metode && row.metode !== metode) return false;
         if (jenis && row.jenis !== jenis) return false;
+        if (subKegiatan && row.sub_kegiatan !== subKegiatan) return false;
         if (status && row.status !== status) return false;
         if (progres && row.progres !== progres) return false;
         if (posisiJadwal && row.posisi_jadwal !== posisiJadwal) return false;
@@ -1216,6 +1238,9 @@
             row.kode_rup,
             row.nama_paket,
             row.satuan_kerja,
+            row.program,
+            row.kegiatan,
+            row.sub_kegiatan,
             row.pengadaan,
             row.metode
           ].join(' ').toLowerCase();
@@ -1236,6 +1261,7 @@
         'filter_pengadaan',
         'filter_metode',
         'filter_jenis',
+        'filter_sub_kegiatan',
         'filter_status',
         'filter_progres',
         'filter_posisi_jadwal',
@@ -1319,6 +1345,9 @@
       setText('detailHistoryKodeRup', row.history_display || '-');
       setText('detailNamaPaket', row.nama_paket);
       setText('detailSatker', row.satuan_kerja);
+      setText('detailProgram', row.program);
+      setText('detailKegiatan', row.kegiatan);
+      setText('detailSubKegiatan', row.sub_kegiatan);
       setText('detailPengadaan', row.pengadaan);
       setText('detailMetode', row.metode);
       setText('detailJenis', row.jenis);
