@@ -5,7 +5,8 @@
     SHEET_ID: '1ccDgtXNATxSYMZuDgd3polvRiTFNiFnjIGMP7b9qmrU',
     SHEETS: {
       perencanaan: 'D_PERENCANAAN',
-      realisasi: 'D_REALISASI_MAP'
+      realisasi: 'D_REALISASI_MAP',
+      realisasiMap: 'D_REALISASI_MAP'
     }
   };
 
@@ -91,7 +92,7 @@
     }
 
     function csvUrlBySheetName(sheetId, sheetName) {
-      const cacheBust = Date.now();
+      const cacheBust = Math.floor(Date.now() / 60000);
       return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cache_bust=${cacheBust}`;
     }
 
@@ -813,6 +814,9 @@
             kode_rup: kodeRup,
             nama_paket: String(r.nama_paket || '').trim(),
             satuan_kerja: String(r.nama_satuan_kerja || '').trim(),
+            program: String(r.program || '').trim() || '-',
+            kegiatan: String(r.kegiatan || '').trim() || '-',
+            sub_kegiatan: String(r.sub_kegiatan || r.subkegiatan || '').trim() || '-',
             pengadaan: String(r.cara_pengadaan || '').trim() || '-',
             jenis: String(r.jenis_pengadaan || '').trim() || '-',
             metode: String(r.metode_pengadaan || '').trim() || '-',
@@ -859,6 +863,7 @@
       fillSelect('filter_pengadaan', [...new Set(rows.map(r => r.pengadaan).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_metode', [...new Set(rows.map(r => r.metode).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_jenis', [...new Set(rows.map(r => r.jenis).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')));
+      fillSelect('filter_sub_kegiatan', [...new Set(rows.map(r => r.sub_kegiatan).filter(v => v && v !== '-'))].sort((a, b) => a.localeCompare(b, 'id')));
       fillSelect('filter_waktu_pemilihan', [...new Set(rows.map(r => r.waktu_pemilihan_label).filter(Boolean))].sort((a, b) => getWaktuOrder(a) - getWaktuOrder(b)));
     }
 
@@ -1022,6 +1027,7 @@
       const pengadaan = qs('filter_pengadaan')?.value || '';
       const metode = qs('filter_metode')?.value || '';
       const jenis = qs('filter_jenis')?.value || '';
+      const subKegiatan = qs('filter_sub_kegiatan')?.value || '';
       const status = qs('filter_status')?.value || '';
       const progres = qs('filter_progres')?.value || '';
       const posisiJadwal = qs('filter_posisi_jadwal')?.value || '';
@@ -1036,6 +1042,7 @@
         if (pengadaan && row.pengadaan !== pengadaan) return false;
         if (metode && row.metode !== metode) return false;
         if (jenis && row.jenis !== jenis) return false;
+        if (subKegiatan && row.sub_kegiatan !== subKegiatan) return false;
         if (status && row.status !== status) return false;
         if (progres && row.progres !== progres) return false;
         if (posisiJadwal && row.posisi_jadwal !== posisiJadwal) return false;
@@ -1049,6 +1056,9 @@
             row.kode_rup,
             row.nama_paket,
             row.satuan_kerja,
+            row.program,
+            row.kegiatan,
+            row.sub_kegiatan,
             row.pengadaan,
             row.metode
           ].join(' ').toLowerCase();
@@ -1069,6 +1079,7 @@
         'filter_pengadaan',
         'filter_metode',
         'filter_jenis',
+        'filter_sub_kegiatan',
         'filter_status',
         'filter_progres',
         'filter_posisi_jadwal',
@@ -1151,6 +1162,9 @@
       setText('detailHistoryKodeRup', row.history_display || '-');
       setText('detailNamaPaket', row.nama_paket);
       setText('detailSatker', row.satuan_kerja);
+      setText('detailProgram', row.program);
+      setText('detailKegiatan', row.kegiatan);
+      setText('detailSubKegiatan', row.sub_kegiatan);
       setText('detailPengadaan', row.pengadaan);
       setText('detailMetode', row.metode);
       setText('detailJenis', row.jenis);
