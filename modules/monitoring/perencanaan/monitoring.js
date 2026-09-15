@@ -264,6 +264,26 @@
       }).format(Number(value || 0)) + '%';
     }
 
+    function formatPaymentDate(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return '-';
+
+      const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) {
+        return new Intl.DateTimeFormat('id-ID', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          timeZone: 'Asia/Jakarta'
+        }).format(parsed);
+      }
+
+      return raw;
+    }
+
     function monthYearLabel(value) {
       const raw = String(value || '').trim();
       return raw || '-';
@@ -723,7 +743,8 @@
           nama_paket: String(r.nama_paket || '').trim(),
           nama_satker: String(r.nama_satker || '').trim(),
           cara_pembayaran: String(r.cara_pembayaran_kontrak || r.cara_pembayaran || '').trim() || '-',
-          besar_pembayaran: amount
+          besar_pembayaran: amount,
+          tgl_bapbast: String(r.tgl_bapbast || r.tanggal_bapbast || '').trim()
         };
 
         if (kodePaket) {
@@ -1286,17 +1307,17 @@
           const paymentRows = Array.isArray(row.payment_rows) ? row.payment_rows : [];
           paymentSummary.innerText = `${paymentRows.length} kali pembayaran • Total ${formatMoney(row.realisasi_keuangan)}`;
           if (!paymentRows.length) {
-            paymentBody.innerHTML = '<tr><td colspan="5">Belum ada realisasi keuangan pada CMBNTNONT_BAST.</td></tr>';
+            paymentBody.innerHTML = '<tr><td colspan="6">Belum ada realisasi keuangan pada CMBNTNONT_BAST.</td></tr>';
           } else {
             paymentRows.forEach((item, index) => {
               const tr = document.createElement('tr');
-              tr.innerHTML = `<td class="center">${index + 1}</td><td>${escapeHtml(item.kode_paket || '-')}</td><td>${escapeHtml(item.no_bast || '-')}</td><td>${escapeHtml(item.cara_pembayaran || '-')}</td><td class="right bold">${formatMoney(item.besar_pembayaran)}</td>`;
+              tr.innerHTML = `<td class="center">${index + 1}</td><td>${escapeHtml(item.kode_paket || '-')}</td><td>${escapeHtml(item.no_bast || '-')}</td><td>${escapeHtml(formatPaymentDate(item.tgl_bapbast))}</td><td>${escapeHtml(item.cara_pembayaran || '-')}</td><td class="right bold">${formatMoney(item.besar_pembayaran)}</td>`;
               paymentBody.appendChild(tr);
             });
           }
         } else {
           paymentSummary.innerText = `Mengikuti Nilai Kontrak • ${formatMoney(row.realisasi_keuangan)}`;
-          paymentBody.innerHTML = '<tr><td colspan="5">Realisasi Keuangan mengikuti Nilai Kontrak untuk E-Purchasing/Pencatatan Non Tender.</td></tr>';
+          paymentBody.innerHTML = '<tr><td colspan="6">Realisasi Keuangan mengikuti Nilai Kontrak untuk E-Purchasing/Pencatatan Non Tender.</td></tr>';
         }
       }
 
