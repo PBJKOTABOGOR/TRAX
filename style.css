@@ -3906,3 +3906,30 @@ textarea{
   stroke-linecap:round;
   stroke-linejoin:round;
 }
+
+/* ITKP KEPKA 74 2026 - indikator dashboard belum memiliki halaman monitoring khusus */
+.itkp-radar-layout .dimensions--lux .dim-row:not(.dim-row--button){
+  min-height:58px;
+  background:linear-gradient(180deg,#ffffff,#f8fbff);
+  border:1px solid #dbeafe;
+  padding:10px 12px;
+}
+
+.itkp-radar-layout .dimensions--lux .dim-row:not(.dim-row--button) .dim-name{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  min-width:0;
+}
+
+.itkp-radar-layout .dimensions--lux .dim-row:not(.dim-row--button) .dim-name small{
+  color:#64748b;
+  font-size:9px;
+  font-weight:800;
+  line-height:1.2;
+  white-space:normal;
+}
+
+.itkp-radar-layout .dimensions--lux .dim-row:not(.dim-row--button) .dim-value{
+  color:#0f766e;
+}
